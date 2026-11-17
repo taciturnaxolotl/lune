@@ -1,6 +1,6 @@
 # lune
 
-a fancy ios browser for me
+A fast, native iOS browser inspired by Arc Search.
 
 The canonical repo for this is hosted on tangled over at [`https://tangled.org/dunkirk.sh/lune`](https://tangled.org/dunkirk.sh/lune)
 
