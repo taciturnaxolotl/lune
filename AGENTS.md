@@ -37,6 +37,7 @@ lune/
             ├── PageMenu.swift       # Page actions, zoom, desktop/user agent, share, site data.
             ├── TabOverview.swift    # Horizontally paged snapshot cards in dark gradient.
             ├── StartPageView.swift  # Blank tab: centered moon, gradient, optional favorites.
+            ├── PrivacyEye.swift     # Animated open/closed eye for private mode.
             ├── SettingsView.swift   # Engine picker, history/cache clearing, about.
             ├── Shared.swift         # LuneTheme, DarkBackdrop, DomainAvatar, Haptics, CardProgress.
             └── FaviconLoader.swift  # Browser/FaviconLoader.swift: cached DuckDuckGo icons + fallback avatars.
@@ -64,6 +65,10 @@ lune/
 Each `Tab` owns its `WKWebView` for its lifetime (page state survives tab switches). Only the selected tab mounts `BrowserPage`, which observes `@Published` tab state directly to avoid leaving the start page visible while a site loads. A blank `WKWebView` loads during tab creation to warm the renderer; restored tabs remain lazy until selected.
 
 Find-in-page uses a themed SwiftUI overlay. WebKit JavaScript counts text nodes and invokes `window.find` to scroll to matches; do not confuse this with `WKWebView.findInteraction`, whose system overlay behaved unreliably in SwiftUI testing. See `FindInPageOverlay.swift` (currently under `Views`).
+
+### Private browsing
+
+`BrowserModel` keeps two tab sets, regular and private; `tabs` and `selectedID` are computed and route to the current mode, so view code never branches on it. Private tabs share one `WKWebsiteDataStore.nonPersistent()` that is dropped when the last private tab closes. They skip history and are never written to SwiftData. The eye button on the left of the tab deck toggles modes (`setPrivate`); `PrivacyEye.swift` draws the animated eye from three animatable shapes (lids, pupil, lashes). The `privateBrowsing` environment value tints `DarkBackdrop` violet. Debug: `-luneOverlay private` opens the deck and flips into private mode.
 
 ### Overlays
 
@@ -148,5 +153,7 @@ Commands are documented at the top of `lune/LuneProbe/LuneProbe.swift`. Coordina
 - Load progress is a 2pt hairline on the bar's top edge, not a coloured line under the status bar.
 - Buttons use `.pressable` (squish plus a soft haptic on touch-down). List rows use `.row` (highlight plus haptic). Do not call `Haptics.tap()` inside a button action, or the haptic fires twice.
 - The tab deck is an in-place overlay, matched to a 30fps screen recording of Arc. Tabs are reordered most-recent-last when the deck opens, so the current tab sits in the right-hand peek slot and the previous tab gets focus. On open, the current card shrinks from `pageFrame` into the peek slot while the others grow out of `browser.tabButtonFrame`. Tapping a card expands it in place to `pageFrame` (about 0.28s spring) as the rest collapse into the tab button.
+- The search sheet opens like Arc's (measured from a 30fps recording): the + pill stretches sideways into the field, and the sheet flies straight to where it will sit above the keyboard (`LuneTheme.sheetSpring`, 0.3s, no bounce) using the last-seen keyboard height (`KeyboardMetrics`). Focus happens immediately on appear: summoning the keyboard stalls the main thread briefly, which is invisible at the start but a visible hitch mid-flight, and the keyboard's own latency still lets the sheet lead. The sheet's start offset comes from the field's measured resting spot (`searchFieldRestMidY`), so the field begins exactly on the + pill. Unmorphed, the sheet wears the bar's gradient and shows ghost copies of the tab stack and chevron beside the pill, so its top row reads as the bar itself. Closing is two-phase: `overlay` leaving `.command` sets `commandCollapsing`, the sheet stays mounted while it takes on the bar's colours, fades its rows, shrinks the field back to the pill and drops onto the bar (`LuneTheme.sheetCloseSpring`), then hands off to the real bar with animations disabled. The dim fades out over 0.42s. Don't use the keyboard's mass-3 spring in SwiftUI: it is so overdamped that it crawls for half a second at the end.
+- Probe commands `noidle`, `tapburst` and `burst` capture transitions mid-flight; XCTest otherwise waits for animations to finish after every tap.
 - The loading line is system blue, 2.5pt, on the top edge of the bottom bar.
 - To sample an animation with the probe, issue several `shot` commands with no `wait` between them; each one lands about 100ms apart.

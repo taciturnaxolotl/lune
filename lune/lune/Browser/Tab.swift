@@ -5,9 +5,9 @@ import Combine
 
 @MainActor
 enum WebViewFactory {
-    static func makeConfiguration() -> WKWebViewConfiguration {
+    static func makeConfiguration(dataStore: WKWebsiteDataStore) -> WKWebViewConfiguration {
         let configuration = WKWebViewConfiguration()
-        configuration.websiteDataStore = .default()
+        configuration.websiteDataStore = dataStore
         configuration.allowsInlineMediaPlayback = true
         return configuration
     }
@@ -46,13 +46,16 @@ final class Tab: NSObject, ObservableObject, Identifiable {
     @Published var awaitingPaint = false
 
     let webView: WKWebView
+    /// Private tabs share an in-memory data store and never touch history or disk.
+    let isPrivate: Bool
     var onVisit: ((URL, String) -> Void)?
     var onPageFinished: (() -> Void)?
     var onSnapshot: (() -> Void)?
     private var cancellables: Set<AnyCancellable> = []
 
-    override init() {
-        webView = WKWebView(frame: .zero, configuration: WebViewFactory.makeConfiguration())
+    init(dataStore: WKWebsiteDataStore = .default(), isPrivate: Bool = false) {
+        self.isPrivate = isPrivate
+        webView = WKWebView(frame: .zero, configuration: WebViewFactory.makeConfiguration(dataStore: dataStore))
         super.init()
 
         webView.navigationDelegate = self

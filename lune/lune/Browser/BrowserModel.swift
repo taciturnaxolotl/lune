@@ -1,4 +1,5 @@
 import Foundation
+import SwiftUI
 import UIKit
 import SwiftData
 import WebKit
@@ -15,15 +16,61 @@ final class BrowserModel {
         case settings
     }
 
-    var tabs: [Tab] = []
-    var selectedID: Tab.ID?
-    var overlay: Overlay = .none
+    /// Private browsing swaps in a separate tab set backed by an in-memory data store.
+    private(set) var isPrivate = false
+    private var regularTabs: [Tab] = []
+    private var regularSelectedID: Tab.ID?
+    private var privateTabs: [Tab] = []
+    private var privateSelectedID: Tab.ID?
+    /// One ephemeral store per private session, so private tabs share logins until the last one closes.
+    private var privateStore: WKWebsiteDataStore?
+
+    /// The tabs of the current mode.
+    var tabs: [Tab] {
+        get { isPrivate ? privateTabs : regularTabs }
+        set {
+            if isPrivate { privateTabs = newValue } else { regularTabs = newValue }
+            if privateTabs.isEmpty { privateStore = nil }
+        }
+    }
+
+    var selectedID: Tab.ID? {
+        get { isPrivate ? privateSelectedID : regularSelectedID }
+        set { if isPrivate { privateSelectedID = newValue } else { regularSelectedID = newValue } }
+    }
+
+    var hasAnyTabs: Bool { !regularTabs.isEmpty || !privateTabs.isEmpty }
+
+    var overlay: Overlay = .none {
+        didSet {
+            // Dismiss the keyboard in the same frame the sheet starts leaving. Otherwise it waits
+            // for SwiftUI to tear down the field and trails the sheet by about half a second.
+            if oldValue == .command, overlay != .command {
+                UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+                commandCollapsing = true
+                searchSheetShown = false
+            }
+        }
+    }
     var findPageSeed: String?
     var commandOpensNewTab = false
+    /// The search sheet stays mounted after closing while it turns back into the bottom bar.
+    var commandCollapsing = false
+    /// Set once the search sheet is actually on screen. The page recedes on this rather than on
+    /// the tap, so it can't shrink ahead of a sheet that hasn't started moving yet.
+    var searchSheetShown = false
+    /// The eyes toggle in the search field. Applied when the search opens something, so the page
+    /// behind the search sheet doesn't swap while you type.
+    var commandPrivate = false
     /// True while the tab deck is spread out; false while a card is zoomed to fill the page.
     var deckSpread = false
     /// Global frame of the tab-stack button; deck cards fly into and out of it.
     var tabButtonFrame: CGRect = .zero
+    /// Global frame of the bar's + pill; the search field grows out of it.
+    var plusButtonFrame: CGRect = .zero
+    /// Where the search field's centre last came to rest, measured, so the next open can start it
+    /// exactly on the + pill whatever this device's keyboard and safe areas are.
+    var searchFieldRestMidY: CGFloat?
     var engine: SearchEngine
 
     private var context: ModelContext?
@@ -68,11 +115,11 @@ final class BrowserModel {
                 tab.snapshot = UIImage(data: data)
             }
             tab.url = URL(string: record.urlString)
-            tabs.append(tab)
+            regularTabs.append(tab)
             if record.selected { selected = tab }
         }
-        if let first = selected ?? tabs.last {
-            selectedID = first.id
+        if let first = selected ?? regularTabs.last {
+            regularSelectedID = first.id
             first.ensureLoaded()
         }
     }
@@ -91,12 +138,12 @@ final class BrowserModel {
     func persist() {
         guard let context else { return }
         try? context.delete(model: TabRecord.self)
-        for (index, tab) in tabs.enumerated() where !tab.showsStartPage {
+        for (index, tab) in regularTabs.enumerated() where !tab.showsStartPage {
             let record = TabRecord(
                 urlString: tab.url?.absoluteString ?? "",
                 title: tab.title,
                 order: index,
-                selected: tab.id == selectedID,
+                selected: tab.id == regularSelectedID,
                 snapshot: tab.snapshotJPEG
             )
             context.insert(record)
@@ -129,6 +176,33 @@ final class BrowserModel {
                     openOverview()
                 }
             case "settings": overlay = .settings
+            case "commandLater":
+                Task { @MainActor in
+                    try? await Task.sleep(for: .seconds(3))
+                    beginSearch(newTab: true)
+                }
+            case "commandRoundTrip":
+                Task { @MainActor in
+                    try? await Task.sleep(for: .seconds(3))
+                    beginSearch(newTab: true)
+                    try? await Task.sleep(for: .seconds(2))
+                    overlay = .none
+                }
+            case "searchPrivate":
+                beginSearch(newTab: true)
+                Task { @MainActor in
+                    try? await Task.sleep(for: .seconds(2.5))
+                    withAnimation(.spring(response: 0.36, dampingFraction: 0.82)) { commandPrivate = true }
+                    try? await Task.sleep(for: .seconds(2.5))
+                    withAnimation(.spring(response: 0.36, dampingFraction: 0.82)) { commandPrivate = false }
+                }
+            case "private":
+                Task { @MainActor in
+                    try? await Task.sleep(for: .seconds(3))
+                    openOverview()
+                    try? await Task.sleep(for: .seconds(1))
+                    setPrivate(true)
+                }
             default: overlay = .none
             }
         }
@@ -143,6 +217,11 @@ final class BrowserModel {
 
     @discardableResult
     private func makeTab() -> Tab {
+        if isPrivate {
+            let store = privateStore ?? .nonPersistent()
+            privateStore = store
+            return Tab(dataStore: store, isPrivate: true)
+        }
         let tab = Tab()
         tab.onVisit = { [weak self] url, title in
             self?.recordVisit(url, title: title)
@@ -195,6 +274,19 @@ final class BrowserModel {
         persist()
     }
 
+    /// Switches between regular and private tab sets. The new set's current tab moves to the end so
+    /// the deck lands on it, matching `openOverview`.
+    func setPrivate(_ enabled: Bool) {
+        guard enabled != isPrivate else { return }
+        selectedTab?.captureSnapshot()
+        isPrivate = enabled
+        if let index = tabs.firstIndex(where: { $0.id == selectedID }), index != tabs.count - 1 {
+            tabs.append(tabs.remove(at: index))
+        }
+        selectedTab?.ensureLoaded()
+        schedulePersist()
+    }
+
     func step(by offset: Int) {
         guard !tabs.isEmpty else { return }
         let index = (selectedIndex + offset + tabs.count) % tabs.count
@@ -227,6 +319,10 @@ final class BrowserModel {
     }
 
     func openURL(_ url: URL) {
+        if overlay == .command, commandPrivate != isPrivate {
+            setPrivate(commandPrivate)
+            commandOpensNewTab = true
+        }
         if commandOpensNewTab || selectedTab == nil {
             newTab(url: url)
         } else if let current = selectedTab {
@@ -240,7 +336,7 @@ final class BrowserModel {
     }
 
     func openOverview() {
-        guard overlay == .none, !tabs.isEmpty else { return }
+        guard overlay == .none, hasAnyTabs else { return }
         deckSpread = false
         if let index = tabs.firstIndex(where: { $0.id == selectedID }), index != tabs.count - 1 {
             tabs.append(tabs.remove(at: index))
@@ -257,6 +353,7 @@ final class BrowserModel {
 
     func beginSearch(newTab: Bool) {
         commandOpensNewTab = newTab
+        commandPrivate = isPrivate
         overlay = .command
     }
 
@@ -337,7 +434,7 @@ final class BrowserModel {
     func clearWebsiteData(for url: URL) async {
         guard let rawHost = url.host()?.lowercased() else { return }
         let host = rawHost.hasPrefix("www.") ? String(rawHost.dropFirst(4)) : rawHost
-        let store = WKWebsiteDataStore.default()
+        let store = selectedTab?.webView.configuration.websiteDataStore ?? .default()
         let types = WKWebsiteDataStore.allWebsiteDataTypes()
         let records = await store.dataRecords(ofTypes: types)
         let matching = records.filter {

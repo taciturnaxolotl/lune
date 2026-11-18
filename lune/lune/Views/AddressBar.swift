@@ -48,6 +48,17 @@ private struct BarLayout: View {
                 browser.openOverview()
             } label: {
                 TabStackIcon(snapshot: tab?.snapshot)
+                    .overlay(alignment: .topTrailing) {
+                        if browser.isPrivate {
+                            PrivacyEye(closed: true, size: 11)
+                                .foregroundStyle(.white)
+                                .frame(width: 17, height: 17)
+                                .background(LuneTheme.violet, in: Circle())
+                                .overlay(Circle().stroke(Tab.chromeTop, lineWidth: 1.5))
+                                .offset(x: 13, y: -12)
+                                .transition(.scale.combined(with: .opacity))
+                        }
+                    }
                     .onGeometryChange(for: CGRect.self) { proxy in
                         proxy.frame(in: .global)
                     } action: { frame in
@@ -58,9 +69,9 @@ private struct BarLayout: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(.pressable)
-            .opacity(browser.tabs.isEmpty ? 0 : 1)
-            .disabled(browser.tabs.isEmpty)
-            .accessibilityLabel("\(browser.tabs.count) tabs")
+            .opacity(browser.hasAnyTabs ? 1 : 0)
+            .disabled(!browser.hasAnyTabs)
+            .accessibilityLabel("\(browser.tabs.count) \(browser.isPrivate ? "Incognito " : "")tabs")
 
             Spacer(minLength: 0)
 
@@ -74,6 +85,11 @@ private struct BarLayout: View {
                     .background(.white.opacity(0.12), in: Capsule())
                     .overlay(Capsule().stroke(.white.opacity(0.14), lineWidth: 0.6))
                     .contentShape(Capsule())
+                    .onGeometryChange(for: CGRect.self) { proxy in
+                        proxy.frame(in: .global)
+                    } action: { frame in
+                        browser.plusButtonFrame = frame
+                    }
             }
             .buttonStyle(.pressable(haptic: .newTab))
             .accessibilityLabel("New tab")
@@ -126,7 +142,7 @@ private struct BarLayout: View {
     }
 }
 
-private struct TabStackIcon: View {
+struct TabStackIcon: View {
     let snapshot: UIImage?
 
     var body: some View {

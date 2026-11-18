@@ -15,6 +15,17 @@ struct StartPageView: View {
                     .scaledToFit()
                     .frame(width: 176, height: 176)
                     .shadow(color: .black.opacity(0.25), radius: 14, y: 8)
+
+                HStack(spacing: 7) {
+                    PrivacyEye(closed: true, size: 16)
+                    Text("Incognito")
+                        .font(.system(size: 14, weight: .semibold))
+                }
+                .foregroundStyle(LuneTheme.violet)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(LuneTheme.violet.opacity(0.14), in: Capsule())
+                .opacity(browser.isPrivate ? 1 : 0)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
             .padding(.bottom, 90)

@@ -32,7 +32,7 @@ struct TabOverview: View {
                     let deckRect = layout.rect(index: index, position: position)
                     let isHero = index == heroIndex
                     let rect = spread ? deckRect : (isHero ? pageFrame : button)
-                    let radius: CGFloat = spread ? 36 * deckRect.width / layout.cardWidth : (isHero ? 0 : 6)
+                    let radius: CGFloat = spread ? 22 * deckRect.width / layout.cardWidth : (isHero ? 0 : 6)
                     TabCard(
                         tab: tab,
                         rect: rect,
@@ -44,6 +44,14 @@ struct TabOverview: View {
                     )
                     .opacity(spread || isHero ? 1 : 0)
                     .zIndex(isHero && !spread ? 500 : Double(index))
+                    .transition(.opacity.combined(with: .scale(scale: 0.94)))
+                }
+
+                if browser.tabs.isEmpty {
+                    emptyState
+                        .frame(width: geometry.size.width, height: geometry.size.height)
+                        .opacity(spread ? 1 : 0)
+                        .transition(.opacity.combined(with: .scale(scale: 0.96)))
                 }
 
                 controls
@@ -77,7 +85,18 @@ struct TabOverview: View {
 
     private var controls: some View {
         HStack {
-            Color.clear.frame(width: 56, height: 44)
+            Button(action: togglePrivate) {
+                PrivacyEye(closed: browser.isPrivate, size: 20)
+                    .foregroundStyle(.white)
+                    .frame(width: 34, height: 34)
+                    .background(browser.isPrivate ? LuneTheme.violet.opacity(0.42) : .white.opacity(0.12), in: Circle())
+                    .overlay(Circle().stroke(.white.opacity(browser.isPrivate ? 0.28 : 0.14), lineWidth: 0.6))
+                    .animation(.easeOut(duration: 0.25), value: browser.isPrivate)
+                    .frame(width: 56, height: 44)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.pressable(haptic: .privacy))
+            .accessibilityLabel(browser.isPrivate ? "Deactivate Incognito" : "Activate Incognito")
             Spacer()
             Button {
                 browser.deckSpread = false
@@ -111,6 +130,40 @@ struct TabOverview: View {
         }
         .padding(.horizontal, 12)
         .padding(.bottom, 22)
+    }
+
+    /// Shown when the current mode has no tabs, which only happens in an empty private session.
+    private var emptyState: some View {
+        Button {
+            browser.deckSpread = false
+            browser.overlay = .none
+            browser.beginSearch(newTab: true)
+        } label: {
+            VStack(spacing: 14) {
+                PrivacyEye(closed: browser.isPrivate, size: 54)
+                    .foregroundStyle(LuneTheme.violet)
+                Text(browser.isPrivate ? "You're browsing Incognito" : "No Tabs")
+                    .font(.system(size: 19, weight: .semibold))
+                    .foregroundStyle(.white)
+                Text(browser.isPrivate
+                     ? "Incognito tabs keep no history and forget\ncookies and logins once they're closed."
+                     : "Tap to start browsing.")
+                    .font(.system(size: 14))
+                    .foregroundStyle(.white.opacity(0.55))
+                    .multilineTextAlignment(.center)
+            }
+            .padding(.bottom, 60)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.pressable(scale: 0.97))
+    }
+
+    private func togglePrivate() {
+        withAnimation(.spring(response: 0.42, dampingFraction: 0.86)) {
+            browser.setPrivate(!browser.isPrivate)
+            heroID = browser.selectedID
+            position = CGFloat(max(0, browser.tabs.count - 2))
+        }
     }
 
     private func open(_ tab: Tab) {

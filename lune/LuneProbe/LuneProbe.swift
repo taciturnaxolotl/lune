@@ -18,6 +18,11 @@ import XCTest
 ///   type <text>                    type into the focused field
 ///   go <text>                      type, then press return
 ///   wait <seconds>                 sleep
+///   noidle                         stop waiting for the app's animations to settle after each event,
+///                                  so a following burst can catch transitions mid-flight
+///   burst <name> <count>           screenshots back to back, as fast as the device allows
+///   tapburst <count> <label>       tap an element while a background thread bursts screenshots,
+///                                  so the first frames land before and during the tap
 final class LuneProbe: XCTestCase {
     private var app = XCUIApplication(bundleIdentifier: "sh.dunkirk.lune")
 
@@ -92,13 +97,85 @@ final class LuneProbe: XCTestCase {
             app.typeText(rest + "\n")
         case "wait":
             Thread.sleep(forTimeInterval: numbers.first ?? 1)
+        case "noidle":
+            Self.skipQuiescence()
+        case "tapburst":
+            let words = rest.split(separator: " ", maxSplits: 1).map(String.init)
+            let count = Int(words[0]) ?? 16
+            let label = words.count > 1 ? words[1] : ""
+            let predicate = NSPredicate(format: "label == %@ OR identifier == %@", label, label)
+            let element = app.descendants(matching: .any).matching(predicate).firstMatch
+            guard element.waitForExistence(timeout: 3) else { return XCTFail("no element \(label)") }
+            let frame = element.frame
+            let target = app.coordinate(withNormalizedOffset: .zero)
+                .withOffset(CGVector(dx: frame.midX, dy: frame.midY))
+            let collector = BurstCollector()
+            let start = Date()
+            let done = DispatchSemaphore(value: 0)
+            Thread.detachNewThread {
+                for _ in 0..<count {
+                    collector.append(Date().timeIntervalSince(start), XCUIScreen.main.screenshot())
+                }
+                done.signal()
+            }
+            Thread.sleep(forTimeInterval: 0.15)
+            let tapAt = Date().timeIntervalSince(start)
+            target.tap()
+            done.wait()
+            for (frame, (time, shot)) in collector.shots.enumerated() {
+                let attachment = XCTAttachment(screenshot: shot)
+                attachment.name = String(format: "%02d-tb-%02d-%+05dms", index, frame, Int((time - tapAt) * 1000))
+                attachment.lifetime = .keepAlways
+                add(attachment)
+            }
+        case "burst":
+            let words = rest.split(separator: " ").map(String.init)
+            let count = words.count > 1 ? Int(words[1]) ?? 10 : 10
+            let start = Date()
+            var shots: [(Double, XCUIScreenshot)] = []
+            for _ in 0..<count {
+                shots.append((Date().timeIntervalSince(start), XCUIScreen.main.screenshot()))
+            }
+            for (frame, (time, shot)) in shots.enumerated() {
+                let attachment = XCTAttachment(screenshot: shot)
+                attachment.name = String(format: "%02d-%@-%02d-%04dms", index, words.first ?? "burst", frame, Int(time * 1000))
+                attachment.lifetime = .keepAlways
+                add(attachment)
+            }
         default:
             XCTFail("unknown command \(command)")
+        }
+    }
+
+    /// XCTest blocks after every event until the app's animations finish, which hides transitions.
+    /// Replacing the private wait with a no-op lets screenshots land during the animation.
+    private static func skipQuiescence() {
+        guard let process = NSClassFromString("XCUIApplicationProcess") else { return }
+        let block: @convention(block) (AnyObject, Bool) -> Void = { _, _ in }
+        let blockPre: @convention(block) (AnyObject, Bool, Bool) -> Void = { _, _, _ in }
+        for (name, implementation) in [
+            ("waitForQuiescenceIncludingAnimationsIdle:", imp_implementationWithBlock(block)),
+            ("waitForQuiescenceIncludingAnimationsIdle:isPreEvent:", imp_implementationWithBlock(blockPre)),
+        ] {
+            if let method = class_getInstanceMethod(process, NSSelectorFromString(name)) {
+                method_setImplementation(method, implementation)
+            }
         }
     }
 
     @MainActor
     private func point(_ x: Double, _ y: Double) -> XCUICoordinate {
         app.coordinate(withNormalizedOffset: CGVector(dx: x, dy: y))
+    }
+}
+
+private final class BurstCollector: @unchecked Sendable {
+    private let lock = NSLock()
+    private(set) var shots: [(Double, XCUIScreenshot)] = []
+
+    func append(_ time: Double, _ shot: XCUIScreenshot) {
+        lock.lock()
+        shots.append((time, shot))
+        lock.unlock()
     }
 }

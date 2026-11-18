@@ -12,10 +12,7 @@ struct PageMenu: View {
 
     var body: some View {
         ZStack(alignment: .bottom) {
-            Color.black.opacity(0.3)
-                .ignoresSafeArea()
-                .onTapGesture { dismiss() }
-
+            Color.clear.allowsHitTesting(false)
             if let tab = browser.selectedTab {
                 VStack(spacing: 16) {
                     NavigationLine(browser: browser, tab: tab)
@@ -24,7 +21,7 @@ struct PageMenu: View {
                         ActionTile(icon: "doc.text.magnifyingglass", label: "Find on Page") {
                             browser.overlay = .findPage
                         }
-                        ActionTile(icon: isPinned ? "pin.fill" : "pin", label: isPinned ? "Pinned" : "Pin") {
+                        ActionTile(icon: isPinned ? "pin.slash.fill" : "pin.fill", label: isPinned ? "Pinned" : "Pin") {
                             guard let url = tab.webView.url else { return }
                             if isPinned {
                                 browser.removeFavorite(url)
